@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tetris Game</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: Arial, sans-serif;
+    background: #111827;
+    color: white;
+  }
+  .game {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    padding: 24px;
+  }
+  canvas {
+    background: #0b1020;
+    border: 3px solid #374151;
+    border-radius: 8px;
+    box-shadow: 0 12px 35px rgba(0,0,0,.35);
+  }
+  #board { width: 300px; height: 600px; }
+  .panel {
+    width: 190px;
+    background: #1f2937;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 12px 35px rgba(0,0,0,.25);
+  }
+  h1 { margin: 0 0 18px; font-size: 28px; }
+  .stat { margin: 14px 0; font-size: 18px; }
+  .value { font-weight: bold; }
+  button {
+    width: 100%;
+    padding: 11px;
+    margin-top: 10px;
+    border: 0;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  .controls {
+    margin-top: 18px;
+    line-height: 1.8;
+    font-size: 14px;
+    color: #d1d5db;
+  }
+  @media (max-width: 650px) {
+    .game { flex-direction: column; align-items: center; }
+    .panel { width: 300px; }
+  }
+</style>
+</head>
+<body>
+<div class="game">
+  <canvas id="board" width="300" height="600"></canvas>
+
+  <div class="panel">
+    <h1>TETRIS</h1>
+    <div class="stat">Score: <span id="score" class="value">0</span></div>
+    <div class="stat">Lines: <span id="lines" class="value">0</span></div>
+    <div class="stat">Level: <span id="level" class="value">1</span></div>
+    <button id="startBtn">Start / Restart</button>
+    <button id="pauseBtn">Pause</button>
+    <div class="controls">
+      <strong>Controls</strong><br>
+      ← → Move<br>
+      ↓ Soft drop<br>
+      ↑ Rotate<br>
+      Space Hard drop<br>
+      P Pause
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+
+const COLS = 10;
+const ROWS = 20;
+const BLOCK = 30;
+
+const COLORS = [
+  null,
+  "#00e5ff", // I
+  "#2962ff", // J
+  "#ff8f00", // L
+  "#ffd600", // O
+  "#00c853", // S
+  "#aa00ff", // T
+  "#ff1744"  // Z
+];
+
+const SHAPES = [
+  [[1,1,1,1]],
+  [[2,0,0],[2,2,2]],
+  [[0,0,3],[3,3,3]],
+  [[4,4],[4,4]],
+  [[0,5,5],[5,5,0]],
+  [[0,6,0],[6,6,6]],
+  [[7,7,0],[0,7,7]]
+];
+
+let board = [];
+let player = null;
+let score = 0;
+let lines = 0;
+let level = 1;
+let dropCounter = 0;
+let lastTime = 0;
+let dropInterval = 800;
+let running = false;
+let paused = false;
+let gameOver = false;
+
+function createBoard() {
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+}
+
+function randomPiece() {
+  const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  return {
+    matrix: shape.map(row => row.slice()),
+    x: Math.floor(COLS / 2) - Math.ceil(shape[0].length / 2),
+    y: 0
+  };
+}
+
+function drawCell(x, y, color) {
+  ctx.fillStyle = COLORS[color];
+  ctx.fillRect(x * BLOCK, y * BLOCK, BLOCK, BLOCK);
+  ctx.strokeStyle = "rgba(255,255,255,.15)";
+  ctx.strokeRect(x * BLOCK, y * BLOCK, BLOCK, BLOCK);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (board[y][x]) drawCell(x, y, board[y][x]);
+    }
+  }
+
+  if (player) {
+    player.matrix.forEach((row, y) => {
+      row.forEach((value, x) => {
+        if (value) drawCell(player.x + x, player.y + y, value);
+      });
+    });
+  }
+
+  if (gameOver) {
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px Arial";
+    ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+    ctx.font = "16px Arial";
+    ctx.fillText("Press Start / Restart", canvas.width / 2, canvas.height / 2 + 35);
+  } else if (paused) {
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px Arial";
+    ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2);
+  }
+}
+
+function collide(arena, p) {
+  const m = p.matrix;
+  for (let y = 0; y < m.length; y++) {
+    for (let x = 0; x < m[y].length; x++) {
+      if (m[y][x] &&
+          (arena[y + p.y] === undefined ||
+           arena[y + p.y][x + p.x] === undefined ||
+           arena[y + p.y][x + p.x] !== 0)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function merge(arena, p) {
+  p.matrix.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value) arena[y + p.y][x + p.x] = value;
+    });
+  });
+}
+
+function clearLines() {
+  let cleared = 0;
+
+  outer:
+  for (let y = ROWS - 1; y >= 0; y--) {
+    for (let x = 0; x < COLS; x++) {
+      if (!board[y][x]) continue outer;
+    }
+
+    board.splice(y, 1);
+    board.unshift(Array(COLS).fill(0));
+    cleared++;
+    y++;
+  }
+
+  if (cleared) {
+    lines += cleared;
+    score += [0, 100, 300, 500, 800][cleared] * level;
+    level = Math.floor(lines / 10) + 1;
+    dropInterval = Math.max(100, 800 - (level - 1) * 70);
+    updateStats();
+  }
+}
+
+function playerReset() {
+  player = randomPiece();
+  if (collide(board, player)) {
+    gameOver = true;
+    running = false;
+  }
+}
+
+function playerMove(dir) {
+  if (!running || paused || gameOver) return;
+  player.x += dir;
+  if (collide(board, player)) player.x -= dir;
+}
+
+function playerDrop() {
+  if (!running || paused || gameOver) return;
+
+  player.y++;
+  if (collide(board, player)) {
+    player.y--;
+    merge(board, player);
+    clearLines();
+    playerReset();
+  }
+  dropCounter = 0;
+}
+
+function hardDrop() {
+  if (!running || paused || gameOver) return;
+
+  let distance = 0;
+  while (!collide(board, player)) {
+    player.y++;
+    distance++;
+  }
+  player.y--;
+  distance--;
+  score += Math.max(0, distance) * 2;
+  merge(board, player);
+  clearLines();
+  playerReset();
+  updateStats();
+  dropCounter = 0;
+}
+
+function rotate(matrix, dir) {
+  for (let y = 0; y < matrix.length; y++) {
+    for (let x = 0; x < y; x++) {
+      [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+    }
+  }
+  if (dir > 0) matrix.forEach(row => row.reverse());
+  else matrix.reverse();
+}
+
+function playerRotate() {
+  if (!running || paused || gameOver) return;
+
+  const oldX = player.x;
+  const oldMatrix = player.matrix.map(row => row.slice());
+  rotate(player.matrix, 1);
+
+  let offset = 1;
+  while (collide(board, player)) {
+    player.x += offset;
+    offset = -(offset + (offset > 0 ? 1 : -1));
+
+    if (Math.abs(offset) > player.matrix[0].length) {
+      player.matrix = oldMatrix;
+      player.x = oldX;
+      return;
+    }
+  }
+}
+
+function updateStats() {
+  document.getElementById("score").textContent = score;
+  document.getElementById("lines").textContent = lines;
+  document.getElementById("level").textContent = level;
+}
+
+function startGame() {
+  board = createBoard();
+  score = 0;
+  lines = 0;
+  level = 1;
+  dropInterval = 800;
+  dropCounter = 0;
+  gameOver = false;
+  paused = false;
+  running = true;
+  playerReset();
+  updateStats();
+  draw();
+}
+
+function togglePause() {
+  if (!running || gameOver) return;
+  paused = !paused;
+  draw();
+}
+
+function update(time = 0) {
+  const delta = time - lastTime;
+  lastTime = time;
+
+  if (running && !paused && !gameOver) {
+    dropCounter += delta;
+    if (dropCounter > dropInterval) playerDrop();
+  }
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+document.addEventListener("keydown", event => {
+  if (event.key === "ArrowLeft") playerMove(-1);
+  else if (event.key === "ArrowRight") playerMove(1);
+  else if (event.key === "ArrowDown") {
+    playerDrop();
+    score += 1;
+    updateStats();
+  }
+  else if (event.key === "ArrowUp") playerRotate();
+  else if (event.code === "Space") {
+    event.preventDefault();
+    hardDrop();
+  }
+  else if (event.key.toLowerCase() === "p") togglePause();
+});
+
+document.getElementById("startBtn").addEventListener("click", startGame);
+document.getElementById("pauseBtn").addEventListener("click", togglePause);
+
+startGame();
+requestAnimationFrame(update);
+</script>
+</body>
+</html>
